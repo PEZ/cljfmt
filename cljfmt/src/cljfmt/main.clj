@@ -1,12 +1,13 @@
 (ns cljfmt.main
   "Functionality to apply formatting to a given project."
   (:require [cljfmt.core :as cljfmt]
+            [clojure.string :as str]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]
-            [clojure.stacktrace :as st]
+            [cljfmt.impl.stacktrace :as st]
             [clojure.tools.cli :as cli]
-            [cljfmt.diff :as diff]))
+            [cljfmt.diff :as diff])
+  (:gen-class))
 
 (defn- abort [& msg]
   (binding [*out* *err*]
@@ -18,10 +19,13 @@
   (binding [*out* *err*]
     (apply println args)))
 
-(defn- relative-path [dir file]
+(defn- relative-path [^java.io.File dir ^java.io.File file]
   (-> (.toAbsolutePath (.toPath dir))
       (.relativize (.toAbsolutePath (.toPath file)))
       (.toString)))
+
+(defn- filename-ext [filename]
+  (subs filename (inc (str/last-index-of filename "."))))
 
 (defn- grep [re dir]
   (filter #(re-find re (relative-path dir %)) (file-seq (io/file dir))))
@@ -136,18 +140,22 @@
              (warn "Failed to format file:" (project-path options f))
              (print-stack-trace e))))))))
 
-(def ^:private cli-file-reader
-  (comp edn/read-string slurp diff/to-absolute-path))
+(defn- cli-file-reader [filepath]
+  (let [contents (slurp filepath)]
+    (if (= (filename-ext filepath) "clj")
+      (read-string contents)
+      (edn/read-string contents))))
 
 (def default-options
   {:project-root "."
    :file-pattern #"\.clj[csx]?$"
    :ansi?        true
    :indentation? true
-   :insert-missing-whitespace?      true
-   :remove-surrounding-whitespace?  true
-   :remove-trailing-whitespace?     true
-   :remove-consecutive-blank-lines? true
+   :insert-missing-whitespace?            true
+   :remove-multiple-non-indenting-spaces? false
+   :remove-surrounding-whitespace?        true
+   :remove-trailing-whitespace?           true
+   :remove-consecutive-blank-lines?       true
    :indents   cljfmt/default-indents
    :alias-map {}})
 
@@ -175,6 +183,9 @@
    [nil "--[no-]indentation"
     :default (:indentation? default-options)
     :id :indentation?]
+   [nil "--[no-]remove-multiple-non-indenting-spaces"
+    :default (:remove-multiple-non-indenting-spaces? default-options)
+    :id :remove-multiple-non-indenting-spaces?]
    [nil "--[no-]remove-surrounding-whitespace"
     :default (:remove-surrounding-whitespace? default-options)
     :id :remove-surrounding-whitespace?]
@@ -191,11 +202,14 @@
 (defn- command-name []
   (or (System/getProperty "sun.java.command") "cljfmt"))
 
+(defn- file-exists? [path]
+  (.exists (io/as-file path)))
+
 (defn -main [& args]
   (let [parsed-opts   (cli/parse-opts args cli-options)
         [cmd & paths] (:arguments parsed-opts)
         options       (merge-default-options (:options parsed-opts))
-        paths         (or (seq paths) default-paths)]
+        paths         (or (seq paths) (filter file-exists? default-paths))]
     (if (:errors parsed-opts)
       (abort (:errors parsed-opts))
       (if (or (nil? cmd) (:help options))

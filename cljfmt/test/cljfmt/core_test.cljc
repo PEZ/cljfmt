@@ -241,6 +241,20 @@
           #?@(:cljs [:alias-map {"t" "thing.core"}])})
         "applies custom indentation to namespaced defn")
     (is (reformats-to?
+         ["(comment)"
+          "(ns thing.core)"
+          ""
+          "(defthing foo [x]"
+          "(+ x 1))"]
+         ["(comment)"
+          "(ns thing.core)"
+          ""
+          "(defthing foo [x]"
+          "  (+ x 1))"]
+         {:indents {'thing.core/defthing [[:inner 0]]}
+          #?@(:cljs [:alias-map {}])})
+        "recognises the current namespace as part of a qualifed indent spec")
+    (is (reformats-to?
          ["(ns example"
           "(:require [thing.core :as t]))"
           ""
@@ -295,7 +309,16 @@
           "  ([x]"
           "   (foo)"
           "   (bar)))"])
-        "multiple arity function with only one arity defined"))
+        "multiple arity function with only one arity defined")
+    (is (reformats-to?
+         ["(fn"
+          "([x]"
+          "(foo)))"]
+         ["(fn"
+          "  ([x]"
+          "   (foo)))"]
+         {:indents {#".*" [[:inner 0]]}})
+        "forms starting without a symbol are treated correctly"))
 
   (testing "comments"
     (is (reformats-to?
@@ -418,7 +441,25 @@
           "[:foo x])"]
          ["(defelem foo [x]"
           "  [:foo x])"])
-        "^def fuzzy rule respected"))
+        "^def fuzzy rule respected")
+    (is (reformats-to?
+         ["(default foo"
+          "         bar)"]
+         ["(default foo"
+          "         bar)"])
+        "^def fuzzy rule does not alter 'default'")
+    (is (reformats-to?
+         ["(defer   foo"
+          "         bar)"]
+         ["(defer   foo"
+          "         bar)"])
+        "^def fuzzy rule does not alter 'defer'")
+    (is (reformats-to?
+         ["(deflate foo"
+          "         bar)"]
+         ["(deflate foo"
+          "         bar)"])
+        "^def fuzzy rule does not alter 'deflate'"))
 
   (testing "comment before ending bracket"
     (is (reformats-to?
@@ -577,7 +618,52 @@
           ":cljs bar)"]
          ["#?@(:clj foo"
           "    :cljs bar)"])
-        "splicing syntax")))
+        "splicing syntax"))
+
+  (testing "namespaced maps"
+    (is (reformats-to?
+         ["#:clj {:a :b"
+          ":c :d}"]
+         ["#:clj {:a :b"
+          "       :c :d}"]))))
+
+(deftest test-remove-multiple-non-indenting-spaces
+  (let [opts {:remove-multiple-non-indenting-spaces? true}]
+    (is (reformats-to? ["[]"] ["[]"] opts))
+    (is (reformats-to? ["[   ]"] ["[]"] opts))
+    (is (reformats-to? ["{   }"] ["{}"] opts))
+    (is (reformats-to? ["#{ }"] ["#{}"] opts))
+    (is (reformats-to? ["[a     b]"] ["[a b]"]  opts))
+    (is (reformats-to? ["{a     b}"] ["{a b}"] opts))
+    (is (reformats-to? ["{a,     b}"] ["{a, b}"] opts))
+    (is (reformats-to? ["#{a     b}"] ["#{a b}"] opts))
+    (is (reformats-to? ["#{    }"] ["#{}"] opts))
+    (is (reformats-to? ["[a     b   c]"] ["[a b c]"] opts))
+    (is (reformats-to? ["#{a     b     }"] ["#{a b}"] opts))
+    (is (reformats-to? ["(do"
+                        ""
+                        "  something)"]
+                       ["(do"
+                        ""
+                        "  something)"]
+                       opts)
+        "non-comment newlines are respected")
+    (is (reformats-to? ["(cond truc"
+                        "      ;; foo"
+                        "      (bar? a    b) :baz)"]
+                       ["(cond truc"
+                        "      ;; foo"
+                        "      (bar? a b) :baz)"]
+                       opts)
+        "comments are respected")
+    (is (reformats-to? ["(cond truc"
+                        "             ;; foo"
+                        "   (bar? a    b) :baz)"]
+                       ["(cond truc"
+                        "             ;; foo"
+                        "   (bar? a b) :baz)"]
+                       (assoc opts :indentation? false))
+        "custom indentation is respected")))
 
 (deftest test-surrounding-whitespace
   (testing "surrounding whitespace removed"
@@ -878,7 +964,59 @@
         " bar "
         " )"]
        {:remove-surrounding-whitespace? false
-        :remove-trailing-whitespace? false})))
+        :remove-trailing-whitespace? false}))
+  (is (reformats-to?
+       ["{:one two :three four}"]
+       ["{:one two"
+        " :three four}"]
+       {:split-keypairs-over-multiple-lines? true}))
+  (is (reformats-to?
+       ["{:one two"
+        " :three four}"]
+       ["{:one two"
+        " :three four}"]
+       {:split-keypairs-over-multiple-lines? true}))
+  (is (reformats-to?
+       ["{:one two"
+        ";comment"
+        ":three four}"]
+       ["{:one two"
+        ";comment"
+        " :three four}"]
+       {:split-keypairs-over-multiple-lines? true}))
+  (is (reformats-to?
+       ["{:one two ;comment"
+        ":three four}"]
+       ["{:one two ;comment"
+        " :three four}"]
+       {:split-keypairs-over-multiple-lines? true}))
+  (is (reformats-to?
+       ["{;comment"
+        ":one two"
+        ":three four}"]
+       ["{;comment"
+        " :one two"
+        " :three four}"]
+       {:split-keypairs-over-multiple-lines? true}))
+  (is (reformats-to?
+       ["{:one two, :three four}"]
+       ["{:one two, "
+        " :three four}"]
+       {:split-keypairs-over-multiple-lines? true
+        :remove-trailing-whitespace? false}))
+  (is (reformats-to?
+       ["{:one two,"
+        " :three four}"]
+       ["{:one two,"
+        " :three four}"]
+       {:split-keypairs-over-multiple-lines? true
+        :remove-trailing-whitespace? false}))
+  (is (reformats-to?
+       ["{:one two #_comment"
+        ":three four}"]
+       ["{:one two #_comment"
+        " :three four}"]
+       {:split-keypairs-over-multiple-lines? true})))
 
 (deftest test-parsing
   (is (reformats-to?
